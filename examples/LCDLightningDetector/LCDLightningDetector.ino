@@ -35,6 +35,14 @@ volatile int AS3935IrqTriggered;
 // Library object initialization First argument is interrupt pin, second is device I2C address
 AS3935 AS3935(2, 0x03);
 
+#define NOISE_COUNTER_MAX 5
+#define NOISE_COUNTER_AGE 15000
+#define NOISE_FLOOR_MAX 7
+
+uint8_t noise_counter = 0;
+uint32_t noise_timer = millis();
+uint8_t noise_floor = 0;
+
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
 void setup()
@@ -59,13 +67,7 @@ void setup()
 
   lcd.setCursor(0, 1);
   lcd.print("Calibrating...");
-  AS3935.setNoiseFloor(7);
-
-  // and run calibration
-  // if lightning detector can not tune tank circuit to required tolerance,
-  // calibration function will return false
-  if (!AS3935.calibrate())
-    Serial.println("Tuning out of range, check your wiring, your sensor and make sure physics laws have not changed!");
+  recalibrateAS3935();
 
   // since this is demo code, we just go on minding our own business and ignore the fact that someone divided by zero
 
@@ -93,7 +95,7 @@ void loop()
   uint32_t blitz = 0;
   uint8_t blitz_min = 0;
   int strokeDistance;
-  
+
   // here we go into loop checking if interrupt has been triggered, which kind of defeats
   // the whole purpose of interrupts, but in real life you could put your chip to sleep
   // and lower power consumption or do other nifty things
@@ -107,9 +109,18 @@ void loop()
     // returned value is bitmap field, bit 0 - noise level too high, bit 2 - disturber detected, and finally bit 3 - lightning!
     if (irqSource & 0b0001)
     {
-      Serial.println("Noise level too high, try adjusting noise floor");
+      if (noise_counter > 0 && (millis() - noise_timer) > NOISE_COUNTER_AGE)
+      {
+        noise_counter = 0;
+      }
+
       lcd.setCursor(0, 1);
       lcd.print("Noise high     ");
+
+      noise_counter++;
+      noise_timer = millis();
+      if (noise_counter >= NOISE_COUNTER_MAX)
+        recalibrateAS3935();
     }
     else if (irqSource & 0b0100)
     {
@@ -138,7 +149,7 @@ void loop()
     }
 
     blitz_min = (blitz - millis() / 60000);
-    if (blitz>0 && blitz_min < 30)
+    if (blitz > 0 && blitz_min < 30)
     {
       char buf[11];
       lcd.setCursor(0, 0);
@@ -150,7 +161,7 @@ void loop()
     {
       lcd.setCursor(0, 0);
       lcd.print("                ");
-      blitz=0;
+      blitz = 0;
     }
     /*
       else
@@ -159,6 +170,27 @@ void loop()
       lcd.print("              ");
       }*/
   }
+}
+
+bool recalibrateAS3935(void)
+{
+
+  lcd.setCursor(0, 1);
+  lcd.print("             ");
+
+  Serial.print(F("Recalibrating with noise_floor="));
+  Serial.print(noise_floor);
+  Serial.print(F(": "));
+  AS3935.setNoiseFloor(noise_floor);
+  if (!AS3935.calibrate())
+    Serial.println("Tuning out of range, check your wiring, your sensor and make sure physics laws have not changed!");
+  else
+    Serial.println(F("done."));
+
+  noise_counter = 0;
+
+  if (noise_floor < NOISE_FLOOR_MAX)
+    noise_floor++;
 }
 
 void printAS3935Registers()
